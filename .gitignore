@@ -35,6 +35,10 @@ CONTEXT.md
 outputs/
 *.log
 
+# Datasets (videos and preprocess caches stay local — copyright + size)
+data/raw/
+data/processed/
+
 # Large model checkpoints
 *.pt
 *.pth
