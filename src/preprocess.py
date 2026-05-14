@@ -23,7 +23,7 @@ from scenedetect.detectors import ContentDetector
 from PIL import Image
 
 
-PROCESSED_DIR = Path(__file__).parent.parent / "data" / "processed"
+PROCESSED_DIR = Path("C:/cheapfake_data/processed")
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 # EasyOCR reader는 모델 로드 비용이 크므로 모듈 수준에서 지연 초기화

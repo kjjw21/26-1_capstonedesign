@@ -14,7 +14,7 @@ from datetime import datetime
 import yt_dlp
 
 
-RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
+RAW_DIR = Path("C:/cheapfake_data/raw")
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 
