@@ -9,7 +9,7 @@ Gradio 기반 웹 데모 UI.
 
 import sys
 import os
-import argparse 
+import argparse
 from pathlib import Path
 
 import gradio as gr
@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.pipeline import run_pipeline
 from src.visualize import build_timeline_chart, build_gauge_chart, build_frame_comparison_html
+from src.explain import generate_explanation, generate_explanation_fallback
 
 
 # ──────────────────────────────────────────────
@@ -31,6 +32,7 @@ def analyze(
     whisper_model: str,
     clip_model: str,
     scene_threshold: float,
+    api_key: str = "",
     progress=gr.Progress(track_tqdm=True),
 ):
     """
@@ -75,6 +77,13 @@ def analyze(
     timeline_fig = build_timeline_chart(vs)
     frame_html = build_frame_comparison_html(vs, prep.keyframes)
 
+    # AI 설명 생성
+    status_cb("AI 설명 생성 중...")
+    if api_key and api_key.strip().startswith("sk-ant-"):
+        explanation = generate_explanation(vs, prep, api_key.strip())
+    else:
+        explanation = generate_explanation_fallback(vs, prep)
+
     # 텍스트 요약
     summary_md = f"""
 ### 분석 결과
@@ -89,6 +98,12 @@ def analyze(
 ---
 
 {vs.summary}
+
+---
+
+### AI 분석 설명
+
+{explanation}
 """.strip()
 
     stt_preview = prep.stt_text[:800] + ("..." if len(prep.stt_text) > 800 else "")
@@ -119,7 +134,6 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown("### 입력")
                 video_input = gr.Video(
                     label="영상 파일 업로드",
-                    height=200,
                 )
                 url_input = gr.Textbox(
                     label="또는 영상 URL 입력",
@@ -148,6 +162,12 @@ def build_ui() -> gr.Blocks:
                         value=27,
                         step=1,
                         info="낮을수록 더 많은 키프레임 추출.",
+                    )
+                    api_key_input = gr.Textbox(
+                        label="Anthropic API 키 (선택)",
+                        placeholder="sk-ant-...",
+                        type="password",
+                        info="입력 시 Claude AI가 불일치 근거를 자세히 설명합니다. 없으면 자동 설명 사용.",
                     )
 
                 analyze_btn = gr.Button("분석 시작", variant="primary", size="lg")
@@ -192,6 +212,7 @@ def build_ui() -> gr.Blocks:
                 whisper_model,
                 clip_model,
                 scene_threshold,
+                api_key_input,
             ],
             outputs=[
                 summary_output,
