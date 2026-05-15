@@ -2,6 +2,8 @@ torch>=2.0.0
 torchvision>=0.15.0
 openai-whisper>=20231117
 git+https://github.com/openai/CLIP.git
+open_clip_torch>=2.20.0
+transformers>=4.30.0
 yt-dlp>=2024.1.0
 opencv-python>=4.8.0
 scenedetect[opencv]>=0.6.3
