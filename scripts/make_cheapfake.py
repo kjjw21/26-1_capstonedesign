@@ -234,6 +234,8 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--min-sim", type=float, default=0.78,
                    help="topic 모드에서 페어로 인정할 최소 코사인 유사도")
+    p.add_argument("--kind-label", default=None,
+                   help="manifest 의 kind 필드를 강제로 이 값으로 설정 (L2, L3 구분용)")
     p.add_argument(
         "--embeddings-dir",
         type=Path,
@@ -279,6 +281,9 @@ def main():
             embeddings_dir=args.embeddings_dir, min_sim=args.min_sim,
         )
         kind = "audio_swap_topic"
+
+    if args.kind_label:
+        kind = args.kind_label
 
     print(f"[fake] 생성 페어   : {len(pairs)}개 (목표 {args.n})")
     if not pairs:
