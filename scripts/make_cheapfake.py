@@ -108,7 +108,7 @@ def sample_pairs(
     rng: random.Random,
 ) -> list:
     """
-    (video_src, audio_src) 페어 n개를 뽑는다.
+    L1 (random) — (video_src, audio_src) 페어 n개를 뽑는다.
     - 같은 페어 중복 방지
     - 영상 1개의 사용 횟수가 max_uses 를 넘지 않게 제한
     - 같은 채널 페어는 50% 확률로 reroll (다양성 위해)
@@ -138,15 +138,108 @@ def sample_pairs(
     return pairs
 
 
+def sample_pairs_topic(
+    items: list,
+    n: int,
+    max_uses: int,
+    rng: random.Random,
+    embeddings_dir: Path,
+    min_sim: float,
+) -> list:
+    """
+    L2 (same-topic) — combined_text 임베딩 유사도가 min_sim 이상인 페어만 사용.
+    의미적으로 비슷한 두 영상을 audio-swap → 실제 SNS cheapfake 와 더 가까운 분포.
+
+    items 의 각 영상에 대응하는 임베딩이 `<embeddings_dir>/<video_id>.npz` 에
+    있어야 한다. 페어를 (sim 내림차순) 정렬한 뒤 max_uses 제약을 두고 n개 선택.
+    """
+    import numpy as np
+
+    # 1) 사용 가능한 영상의 text_emb 로드
+    enriched = []
+    for it in items:
+        vid = it.get("video_id")
+        npz = embeddings_dir / f"{vid}.npz"
+        if not npz.exists():
+            continue
+        try:
+            d = np.load(npz, allow_pickle=True)
+            text_emb = d["text_emb"]
+        except Exception:
+            continue
+        enriched.append((it, text_emb))
+
+    if len(enriched) < 2:
+        print(f"  ! 임베딩이 부족합니다 ({len(enriched)}개). "
+              f"먼저 scripts/extract_clip_embeddings.py 를 돌리세요.")
+        return []
+
+    # 2) 페어 sim 행렬 (대칭, 상삼각만)
+    embs = np.stack([e for _, e in enriched]).astype(np.float32)
+    sim_matrix = embs @ embs.T   # 이미 L2 정규화된 임베딩
+
+    candidates = []
+    nE = len(enriched)
+    for i in range(nE):
+        for j in range(i + 1, nE):
+            s = float(sim_matrix[i, j])
+            if s >= min_sim:
+                candidates.append((s, i, j))
+
+    # 3) sim 내림차순으로 정렬 + 약간의 무작위성(jitter)
+    candidates.sort(key=lambda x: (-x[0], rng.random()))
+
+    # 4) max_uses 제약하에 페어 n개 선택. (i->j) 와 (j->i) 양방향을 고려
+    pairs = []
+    usage = defaultdict(int)
+    seen = set()
+    for s, i, j in candidates:
+        if len(pairs) >= n:
+            break
+        # 무작위로 (i->j) 또는 (j->i) 선택 — 어느 쪽이 비디오 source 인지
+        if rng.random() < 0.5:
+            a, b = enriched[i][0], enriched[j][0]
+        else:
+            a, b = enriched[j][0], enriched[i][0]
+
+        key = (a["video_id"], b["video_id"])
+        if key in seen:
+            continue
+        if usage[a["video_id"]] >= max_uses or usage[b["video_id"]] >= max_uses:
+            continue
+
+        seen.add(key)
+        usage[a["video_id"]] += 1
+        usage[b["video_id"]] += 1
+        # sim 정보를 entry 에 실어두기 위해 a 사본에 첨부 (manifest 에 기록됨)
+        pairs.append((a, b, s))
+
+    return pairs
+
+
 # ──────────────────────────────────────────────
 # CLI
 # ──────────────────────────────────────────────
 
 def parse_args():
     p = argparse.ArgumentParser(description="FFmpeg 기반 Cheapfake 자동 생성기")
+    p.add_argument(
+        "--mode",
+        default="random",
+        choices=["random", "topic"],
+        help="random=L1 무작위 페어, topic=L2 임베딩 유사도 기반 같은 주제 페어",
+    )
     p.add_argument("--n", type=int, default=50, help="만들 cheapfake 개수")
     p.add_argument("--max-uses", type=int, default=4, help="영상 1개의 최대 사용 횟수")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--min-sim", type=float, default=0.78,
+                   help="topic 모드에서 페어로 인정할 최소 코사인 유사도")
+    p.add_argument(
+        "--embeddings-dir",
+        type=Path,
+        default=Path("data/embeddings"),
+        help="topic 모드에서 사용할 video_id.npz 임베딩 디렉토리",
+    )
     p.add_argument(
         "--manifest-in",
         type=Path,
@@ -166,6 +259,7 @@ def main():
     rng = random.Random(args.seed)
 
     ffmpeg_bin = resolve_ffmpeg()
+    print(f"[fake] mode       : {args.mode}")
     print(f"[fake] ffmpeg     : {ffmpeg_bin}")
 
     items = load_normal_manifest(args.manifest_in)
@@ -174,19 +268,35 @@ def main():
         print("정상 영상이 2개 미만이라 합성할 수 없습니다. 먼저 크롤러를 돌리세요.")
         return
 
-    pairs = sample_pairs(items, args.n, args.max_uses, rng)
+    # 페어 샘플링 — mode 에 따라 분기
+    if args.mode == "random":
+        raw_pairs = sample_pairs(items, args.n, args.max_uses, rng)
+        pairs = [(a, b, None) for a, b in raw_pairs]
+        kind = "audio_swap_random"     # 기존 'audio_swap' 과 구분되게 명시
+    else:  # topic
+        pairs = sample_pairs_topic(
+            items, args.n, args.max_uses, rng,
+            embeddings_dir=args.embeddings_dir, min_sim=args.min_sim,
+        )
+        kind = "audio_swap_topic"
+
     print(f"[fake] 생성 페어   : {len(pairs)}개 (목표 {args.n})")
+    if not pairs:
+        print("페어가 없습니다. 종료.")
+        return
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     args.manifest_out.parent.mkdir(parents=True, exist_ok=True)
 
     succeeded = 0
     failed = 0
+    skipped = 0
     with args.manifest_out.open("a", encoding="utf-8") as mf:
-        for a, b in tqdm(pairs, desc="compose", unit="vid"):
-            fake_id = f"fake_{a['video_id']}_{b['video_id']}"
+        for a, b, sim in tqdm(pairs, desc="compose", unit="vid"):
+            fake_id = f"fake_{kind}_{a['video_id']}_{b['video_id']}"
             out_path = args.out_dir / f"{fake_id}.mp4"
             if out_path.exists():
+                skipped += 1
                 continue
 
             video_src = Path(a["file_path"])
@@ -197,7 +307,7 @@ def main():
 
             try:
                 make_one(ffmpeg_bin, video_src, audio_src, out_path)
-            except subprocess.CalledProcessError as e:
+            except subprocess.CalledProcessError:
                 failed += 1
                 continue
 
@@ -213,7 +323,8 @@ def main():
                 "channel_audio": b.get("channel"),
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "label": "fake",
-                "kind": "audio_swap",
+                "kind": kind,
+                "pair_similarity": float(sim) if sim is not None else None,
             }
             mf.write(json.dumps(entry, ensure_ascii=False) + "\n")
             succeeded += 1
@@ -221,6 +332,7 @@ def main():
     print(f"\n=== 결과 ===")
     print(f"  succeeded : {succeeded}")
     print(f"  failed    : {failed}")
+    print(f"  skipped   : {skipped}  (out 파일 이미 존재)")
     print(f"  out dir   : {args.out_dir}")
     print(f"  manifest  : {args.manifest_out}")
 
