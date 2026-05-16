@@ -141,20 +141,23 @@ def main():
     print(f"총 영상: {len(rows)}개\n")
 
     print(f"[점수 분포 (kind별)]")
-    for kind in ["normal", "audio_swap_random", "audio_swap_topic"]:
+    for kind in ["normal", "audio_swap_random", "audio_swap_topic", "audio_swap_topic_strong"]:
         stats(kind, by_kind.get(kind, []))
 
     normal_scores = by_kind.get("normal", [])
     l1_scores = by_kind.get("audio_swap_random", [])
     l2_scores = by_kind.get("audio_swap_topic", [])
-    all_fake = l1_scores + l2_scores
+    l3_scores = by_kind.get("audio_swap_topic_strong", [])
+    all_fake = l1_scores + l2_scores + l3_scores
 
     # 시나리오별 분류 성능
-    for scenario_name, fakes in [
+    scenarios = [
         ("normal vs L1 (random)", l1_scores),
         ("normal vs L2 (topic)", l2_scores),
+        ("normal vs L3 (topic strong)", l3_scores),
         ("normal vs all fakes", all_fake),
-    ]:
+    ]
+    for scenario_name, fakes in scenarios:
         if not fakes:
             continue
         print(f"\n[{scenario_name}]  n_normal={len(normal_scores)}  n_fake={len(fakes)}")
