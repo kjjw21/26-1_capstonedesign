@@ -48,16 +48,22 @@ class VideoScore:
 def similarity_to_mismatch(sim: float) -> float:
     """
     CLIP 코사인 유사도 [-1, 1] → 불일치 점수 [0, 100].
-    
-    CLIP zero-shot 에서 영상-텍스트 유사도는 보통 0.1~0.4 범위.
-    - sim >= 0.30 : 잘 일치  → 낮은 불일치 점수
-    - sim  0.15~0.30 : 모호  → 중간 점수
-    - sim <  0.15 : 불일치  → 높은 점수
-    
-    선형 역변환 후 클리핑.
+
+    매핑 범위는 실제 다국어 CLIP (xlm-roberta-base-ViT-B-32) 의 frame-level
+    similarity 경험 분포에 맞춰 캘리브레이션됨 (data/embeddings/*.npz 152 영상
+    × 약 18 keyframes 기준):
+
+        normal  : p1=0.106  p50=0.206  p95=0.267  p99=0.307
+        fake    : p1=0.094  p50=0.201  p95=0.251  p99=0.267
+
+    분포의 p1~p99 범위를 점수 [0, 100] 에 매핑하여 saturation 을 1% 미만으로
+    유지하면서 dynamic range 전체를 활용한다.
+
+    이전 매핑 [0.05, 0.40] 은 OpenAI CLIP zero-shot 의 좁은 분포에 맞춘
+    값이라, 다국어 CLIP 분포에서는 점수가 48~67 영역에 압축되어 게이지나
+    학습 feature 로서의 정보량이 매우 작았다.
     """
-    # 경험적 범위: [0.05, 0.40] → [100, 0] 선형 매핑
-    low, high = 0.05, 0.40
+    low, high = 0.10, 0.30
     score = (high - sim) / (high - low) * 100
     return float(np.clip(score, 0, 100))
 
