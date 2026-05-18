@@ -55,7 +55,7 @@ def predict(
 
 
 def info() -> dict:
-    """학습 시 메타데이터 반환 (UI 표시용)."""
+    """학습 시 메타데이터 + 일반화 성능 반환 (UI 표시용)."""
     b = _load()
     return {
         "feature_keys": b["feature_keys"],
@@ -63,4 +63,6 @@ def info() -> dict:
         "class_balance": b["class_balance"],
         "coefficients": dict(zip(b["feature_keys"], b["clf"].coef_.flatten().tolist())),
         "intercept": float(b["clf"].intercept_[0]),
+        "cv_metrics": b.get("cv_metrics"),
+        "holdout_metrics": b.get("holdout_metrics"),
     }

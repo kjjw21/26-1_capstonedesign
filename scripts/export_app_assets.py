@@ -20,6 +20,8 @@ from pathlib import Path
 import joblib
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import StandardScaler
 
 
@@ -39,7 +41,7 @@ FEATURE_KEYS = ["overall_score", "avg_similarity", "min_similarity"]
 # 1. 분류기 학습 + 저장
 # ──────────────────────────────────────────────
 
-def train_classifier():
+def train_classifier(seed: int = 42):
     rows = []
     with open("data/eval/baseline_mclip_scores.jsonl", "r", encoding="utf-8") as f:
         for line in f:
@@ -49,20 +51,66 @@ def train_classifier():
     X = np.array([[r[k] for k in FEATURE_KEYS] for r in rows], dtype=np.float32)
     y = np.array([1 if r["label_true"] == "fake" else 0 for r in rows], dtype=np.int64)
 
+    # ── 일반화 성능 측정: 5-fold stratified CV ──
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
+    fold_aucs, fold_f1s, fold_precs, fold_recs = [], [], [], []
+    for fold, (tr, te) in enumerate(skf.split(X, y), 1):
+        sc = StandardScaler().fit(X[tr])
+        c = LogisticRegression(max_iter=1000, C=1.0).fit(sc.transform(X[tr]), y[tr])
+        yp_prob = c.predict_proba(sc.transform(X[te]))[:, 1]
+        yp = c.predict(sc.transform(X[te]))
+        fold_aucs.append(roc_auc_score(y[te], yp_prob))
+        fold_f1s.append(f1_score(y[te], yp, zero_division=0))
+        fold_precs.append(precision_score(y[te], yp, zero_division=0))
+        fold_recs.append(recall_score(y[te], yp, zero_division=0))
+
+    cv_metrics = {
+        "auc": {"mean": float(np.mean(fold_aucs)), "std": float(np.std(fold_aucs))},
+        "f1": {"mean": float(np.mean(fold_f1s)), "std": float(np.std(fold_f1s))},
+        "precision": {"mean": float(np.mean(fold_precs)), "std": float(np.std(fold_precs))},
+        "recall": {"mean": float(np.mean(fold_recs)), "std": float(np.std(fold_recs))},
+        "n_splits": 5,
+        "seed": seed,
+    }
+
+    # ── 추가: 70/30 hold-out 평가 ──
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, stratify=y, random_state=seed)
+    sc_ho = StandardScaler().fit(Xtr)
+    c_ho = LogisticRegression(max_iter=1000, C=1.0).fit(sc_ho.transform(Xtr), ytr)
+    yp_ho_prob = c_ho.predict_proba(sc_ho.transform(Xte))[:, 1]
+    yp_ho = c_ho.predict(sc_ho.transform(Xte))
+    holdout_metrics = {
+        "auc": float(roc_auc_score(yte, yp_ho_prob)),
+        "f1": float(f1_score(yte, yp_ho, zero_division=0)),
+        "precision": float(precision_score(yte, yp_ho, zero_division=0)),
+        "recall": float(recall_score(yte, yp_ho, zero_division=0)),
+        "test_size": 0.3,
+        "n_test": int(len(yte)),
+    }
+
+    # ── final fit: 전체 데이터로 학습 (앱 런타임용) ──
     scaler = StandardScaler().fit(X)
     clf = LogisticRegression(max_iter=1000, C=1.0).fit(scaler.transform(X), y)
+
     bundle = {
         "scaler": scaler,
         "clf": clf,
         "feature_keys": FEATURE_KEYS,
-        "n_train": len(y),
+        "n_train": int(len(y)),
         "class_balance": {"normal": int((y == 0).sum()), "fake": int((y == 1).sum())},
+        "cv_metrics": cv_metrics,
+        "holdout_metrics": holdout_metrics,
     }
     out = OUT_DIR / "classifier.joblib"
     joblib.dump(bundle, out)
     print(f"[clf] saved -> {out}")
     print(f"[clf] coefficients: {dict(zip(FEATURE_KEYS, clf.coef_.flatten().tolist()))}")
     print(f"[clf] intercept   : {float(clf.intercept_[0]):.3f}")
+    print(f"[clf] CV (5-fold) : AUC={cv_metrics['auc']['mean']:.3f}±{cv_metrics['auc']['std']:.3f}  "
+          f"F1={cv_metrics['f1']['mean']:.3f}±{cv_metrics['f1']['std']:.3f}  "
+          f"Prec={cv_metrics['precision']['mean']:.3f}  Rec={cv_metrics['recall']['mean']:.3f}")
+    print(f"[clf] hold-out 30%: AUC={holdout_metrics['auc']:.3f}  F1={holdout_metrics['f1']:.3f}  "
+          f"Prec={holdout_metrics['precision']:.3f}  Rec={holdout_metrics['recall']:.3f}")
 
 
 # ──────────────────────────────────────────────

@@ -36,7 +36,6 @@ def analyze(
     video_file,
     url_input: str,
     whisper_model: str,
-    clip_model: str,
     scene_threshold: float,
     api_key: str = "",
     progress=gr.Progress(track_tqdm=True),
@@ -93,9 +92,25 @@ def analyze(
     if result.classifier_result is not None:
         cr = result.classifier_result
         pf_pct = cr["prob_fake"] * 100
+        # 분류기의 일반화 성능을 함께 표시 (사용자가 이 verdict를 어느 정도 신뢰할지 판단)
+        try:
+            from src import classifier as _clf_mod
+            cinfo = _clf_mod.info()
+            cv = cinfo.get("cv_metrics") or {}
+            cv_line = ""
+            if cv:
+                cv_line = (
+                    f"<small>분류기 일반화 성능 (5-fold CV, n={cinfo['n_train']}): "
+                    f"AUC={cv['auc']['mean']:.3f}±{cv['auc']['std']:.3f}, "
+                    f"F1={cv['f1']['mean']:.3f}±{cv['f1']['std']:.3f}, "
+                    f"Recall={cv['recall']['mean']:.3f}</small>"
+                )
+        except Exception:
+            cv_line = ""
         clf_block = (
             f"**학습 분류기 판정:** **{('🚨 위조 의심' if cr['label']=='fake' else '✅ 정상')}**  \n"
-            f"위조 확률 P(fake) = {pf_pct:.1f}%  |  confidence = {cr['confidence']*100:.0f}%"
+            f"위조 확률 P(fake) = {pf_pct:.1f}%  |  confidence = {cr['confidence']*100:.0f}%  \n"
+            + cv_line
         )
     else:
         clf_block = "_학습 분류기 자산 미로드_"
@@ -192,14 +207,12 @@ def build_ui() -> gr.Blocks:
                     whisper_model = gr.Dropdown(
                         label="Whisper 모델 (STT)",
                         choices=["tiny", "base", "small", "medium"],
-                        value="base",
-                        info="클수록 정확하지만 느림. GPU 없으면 base 권장.",
+                        value="tiny",
+                        info="클수록 정확하지만 느림. GPU 없을 땐 tiny 권장 (baseline 측정과 동일 조건).",
                     )
-                    clip_model = gr.Dropdown(
-                        label="CLIP 모델",
-                        choices=["ViT-B/32", "ViT-L/14"],
-                        value="ViT-L/14",
-                        info="ViT-L/14 가 더 정확. GPU 없으면 ViT-B/32 권장.",
+                    gr.Markdown(
+                        "**임베딩 백본**: 다국어 CLIP `xlm-roberta-base-ViT-B-32` 고정  \n"
+                        "<small>한국어 cheapfake 탐지에 최적화된 백본. 영어 CLIP 대비 ROC-AUC +0.258.</small>"
                     )
                     scene_threshold = gr.Slider(
                         label="장면 감지 민감도",
@@ -256,7 +269,6 @@ def build_ui() -> gr.Blocks:
                 video_input,
                 url_input,
                 whisper_model,
-                clip_model,
                 scene_threshold,
                 api_key_input,
             ],
