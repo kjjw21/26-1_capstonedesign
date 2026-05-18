@@ -12,12 +12,18 @@ import os
 import argparse
 from pathlib import Path
 
+# Windows cp949 콘솔에서 한글 status 메시지가 깨지지 않도록
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 import gradio as gr
 
 # src 패키지 경로 설정
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.pipeline import run_pipeline
+from src.pipeline import run_pipeline, run_pipeline_v2
 from src.visualize import build_timeline_chart, build_gauge_chart, build_frame_comparison_html
 from src.explain import generate_explanation, generate_explanation_fallback
 
@@ -58,10 +64,9 @@ def analyze(
         progress(0, desc=msg)
 
     try:
-        result = run_pipeline(
+        result = run_pipeline_v2(
             source=source,
             whisper_model=whisper_model,
-            clip_model=clip_model,
             scene_threshold=scene_threshold,
             status_cb=status_cb,
         )
@@ -84,16 +89,57 @@ def analyze(
     else:
         explanation = generate_explanation_fallback(vs, prep)
 
-    # 텍스트 요약
+    # 분류기 결과 블록
+    if result.classifier_result is not None:
+        cr = result.classifier_result
+        pf_pct = cr["prob_fake"] * 100
+        clf_block = (
+            f"**학습 분류기 판정:** **{('🚨 위조 의심' if cr['label']=='fake' else '✅ 정상')}**  \n"
+            f"위조 확률 P(fake) = {pf_pct:.1f}%  |  confidence = {cr['confidence']*100:.0f}%"
+        )
+    else:
+        clf_block = "_학습 분류기 자산 미로드_"
+
+    # 검색 후보 블록
+    def _fmt_cand(c):
+        title = c.get("title") or "(제목 없음)"
+        if len(title) > 60:
+            title = title[:57] + "..."
+        url = c.get("url") or ""
+        url_md = f"[열기]({url})" if url else ""
+        return f"- `sim={c['similarity']:.3f}` · {title} · {url_md}"
+
+    audio_cands = result.audio_source_candidates[:3]
+    video_cands = result.video_source_candidates[:3]
+    if audio_cands:
+        audio_block = "**오디오 원본 후보 (Top-3)**  \n" + "\n".join(_fmt_cand(c) for c in audio_cands)
+    else:
+        audio_block = "_오디오 원본 후보 없음 (검색 인덱스 미로드)_"
+    if video_cands:
+        video_block = "**영상 원본 후보 (Top-3)**  \n" + "\n".join(_fmt_cand(c) for c in video_cands)
+    else:
+        video_block = ""
+
     summary_md = f"""
 ### 분석 결과
 
-**판정:** {vs.label}  
-**불일치 점수:** {vs.overall_score:.1f} / 100  
-**신뢰도:** {vs.confidence * 100:.0f}%  
-**분석 프레임 수:** {len(vs.frame_scores)}개  
-**이상 프레임:** {vs.anomaly_count}개  
-**의심 구간:** {len(vs.suspicious_intervals)}개  
+{clf_block}
+
+**점수 기반 판정:** {vs.label}
+**불일치 점수:** {vs.overall_score:.1f} / 100
+**신뢰도:** {vs.confidence * 100:.0f}%
+**분석 프레임 수:** {len(vs.frame_scores)}개
+**이상 프레임:** {vs.anomaly_count}개
+**의심 구간:** {len(vs.suspicious_intervals)}개
+**임베딩 백본:** `{result.backend}`
+
+---
+
+### 추정 원본 (Phase C — Source Retrieval)
+
+{audio_block}
+
+{video_block}
 
 ---
 
