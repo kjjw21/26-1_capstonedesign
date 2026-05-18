@@ -271,20 +271,29 @@ def train_one_fold(tr_idx_norm, te_idx_norm, fake_idx, seed=42):
     train_y = torch.from_numpy(train_labels).to(device)
 
     n = len(train_idx)
+    epoch_losses = []
     for ep in range(EPOCHS):
         perm = np.random.permutation(n)
+        ep_loss_sum = 0.0
+        ep_batches = 0
         for i in range(0, n, BATCH):
             sel = perm[i:i+BATCH]
             opt.zero_grad()
             txt_emb = encode_text([train_texts[j] for j in sel], train=True)
             txt_emb = F.normalize(txt_emb, dim=-1)
             img_emb = train_imgs[torch.from_numpy(sel).long().to(device)]
-            # img_emb 는 이미 L2 정규화됨 (extract_clip_embeddings.py 가 normalize 함)
             sim = (img_emb * txt_emb).sum(dim=-1)
             logits = sim * TEMP
             loss = F.binary_cross_entropy_with_logits(logits, train_y[torch.from_numpy(sel).long().to(device)])
             loss.backward()
             opt.step()
+            ep_loss_sum += loss.item()
+            ep_batches += 1
+        ep_loss = ep_loss_sum / max(ep_batches, 1)
+        epoch_losses.append(ep_loss)
+        # 학습이 잘 가고 있는지 5 epoch 마다 출력
+        if (ep + 1) % 5 == 0 or ep == 0:
+            print(f'  ep {ep+1:>3}/{EPOCHS}  loss={ep_loss:.4f}')
 
     # 평가
     model.eval()
@@ -310,6 +319,7 @@ def train_one_fold(tr_idx_norm, te_idx_norm, fake_idx, seed=42):
         sub_y = np.concatenate([np.ones(mask.sum()), np.zeros(normal_mask.sum())])
         sub_s = np.concatenate([fake_score[mask], fake_score[normal_mask]])
         out[kname] = roc_auc_score(sub_y, sub_s)
+    out['epoch_losses'] = epoch_losses
     return out""")
 
 code(r"""normal_idx_all = np.where(labels == 1)[0]
