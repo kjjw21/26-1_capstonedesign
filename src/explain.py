@@ -13,8 +13,11 @@ from .score import VideoScore
 from .preprocess import PreprocessResult
 
 
+import os
+
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+# 모델 이름은 환경변수로 override 가능. 기본값은 안정성/품질 균형이 좋은 Sonnet 4.5.
+CLAUDE_MODEL = os.environ.get("CHEAPFAKE_CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 
 
 def build_prompt(video_score: VideoScore, prep: PreprocessResult) -> str:

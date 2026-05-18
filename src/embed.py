@@ -1,10 +1,14 @@
 """
-embed.py
-CLIP ViT-L/14 기반 멀티모달 임베딩 모듈.
+embed.py — Legacy OpenAI CLIP embedding module.
 
-- 키프레임 이미지 배치 임베딩
-- 텍스트 임베딩
-- 코사인 유사도 계산
+**Status**: Legacy. 새 코드는 `src/mclip.py` (다국어 CLIP — xlm-roberta-base-
+ViT-B-32) 를 사용한다. 이 모듈은 다음 두 경로에서만 살아 있다:
+
+  - src.pipeline.run_pipeline()             — Phase A 초기 (OpenAI CLIP) 경로
+  - scripts/run_baseline_eval.py            — 영어 CLIP baseline 재현 비교용
+
+앱 런타임(`run_pipeline_v2`)과 모든 학습/평가/검색 스크립트는 mclip 을
+직접 사용한다. 이 파일에 새 기능을 추가하지 말 것 — `src/mclip.py` 에 추가.
 """
 
 import os
