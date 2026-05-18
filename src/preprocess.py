@@ -226,12 +226,60 @@ def combine_text(stt_text: str, keyframes: list) -> str:
 # 통합 파이프라인
 # ──────────────────────────────────────────────
 
+def _load_cached_result(uid: str, video_path: str, status) -> Optional["PreprocessResult"]:
+    """
+    이전 실행에서 저장된 preprocess_result.json 을 가능한 한 안전하게 복원한다.
+    캐시가 없거나, 키프레임 이미지 파일 중 하나라도 사라졌으면 None 을 반환해
+    재계산으로 폴백한다.
+    """
+    cache_path = PROCESSED_DIR / uid / "preprocess_result.json"
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return None
+
+    # 키프레임 이미지가 실제 디스크에 있는지 모두 확인 (앱이 OCR/Plotly 에 그대로 사용)
+    kf_data = d.get("keyframes") or []
+    keyframes = []
+    for k in kf_data:
+        p = k.get("path", "")
+        if not p or not os.path.exists(p):
+            return None
+        keyframes.append(
+            Keyframe(
+                index=int(k["index"]),
+                timestamp=float(k["timestamp"]),
+                path=p,
+                ocr_text=k.get("ocr_text", "") or "",
+            )
+        )
+    if not keyframes:
+        return None
+
+    status(f"캐시 hit — preprocess 결과 재사용 ({len(keyframes)} keyframes)")
+    return PreprocessResult(
+        uid=d["uid"],
+        video_path=d.get("video_path", video_path),
+        duration=float(d.get("duration", 0.0)),
+        fps=float(d.get("fps", 0.0)),
+        keyframes=keyframes,
+        stt_text=d.get("stt_text", "") or "",
+        stt_segments=d.get("stt_segments", []) or [],
+        combined_text=d.get("combined_text", "") or "",
+        out_dir=d.get("out_dir", str(PROCESSED_DIR / uid)),
+    )
+
+
 def preprocess(
     uid: str,
     video_path: str,
     whisper_model: str = "base",
     scene_threshold: float = 27.0,
     status_cb=None,
+    use_cache: bool = True,
 ) -> PreprocessResult:
     """
     전체 전처리 파이프라인을 실행한다.
@@ -243,6 +291,7 @@ def preprocess(
     whisper_model : STT 모델 크기
     scene_threshold : 장면 감지 민감도
     status_cb     : 진행 상황 콜백 fn(message: str)
+    use_cache     : True 면 preprocess_result.json 이 있을 때 재사용
 
     Returns
     -------
@@ -254,6 +303,12 @@ def preprocess(
     def status(msg):
         if status_cb:
             status_cb(msg)
+
+    # Step 0: 캐시 hit 시 즉시 반환 (Whisper/OCR/키프레임 추출 전부 건너뜀)
+    if use_cache:
+        cached = _load_cached_result(uid, video_path, status)
+        if cached is not None:
+            return cached
 
     # Step 1: 키프레임 추출
     status("키프레임 추출 중...")
